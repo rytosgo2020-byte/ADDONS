@@ -4,14 +4,16 @@ if SERVER then
 end
 
 CYBERWARE = CYBERWARE or {}
-CYBERWARE.Version = "2.0"
+CYBERWARE.Version = "2.1"
 
 CYBERWARE.Config = {
-    -- Человечность. Полный комплект МК.3 ≈ 66 ед., МК.4 ≈ 95 ед., МК.5 ≈ 124 ед. нагрузки.
+    -- Человечность. Нагрузка: МК.1 4, МК.2 6, МК.3 8, МК.4 11, МК.5 14 (ОС 10–22, оптика 4–10).
+    -- Типичный РП-набор из 6 имплантов МК.3 ≈ 54 ед. (нестабильность), 8 имплантов — киберпсихоз,
+    -- полный комплект МК.3 — терминальная стадия.
     DefaultMaxHumanity = 100,
-    PsychosisStart = 25,      -- ниже: нестабильность (лёгкие галлюцинации)
-    PsychosisStage2 = 0,      -- ниже: киберпсихоз
-    PsychosisTerminal = -20,  -- ниже: терминальная стадия
+    PsychosisStart = 50,      -- ниже: нестабильность (шёпот, навязчивые мысли)
+    PsychosisStage2 = 25,     -- ниже: киберпсихоз (галлюцинации, ярость, бонус к урону)
+    PsychosisTerminal = 0,    -- ниже: терминальная стадия (неконтролируемые приступы)
     MinHumanityCap = -150,
     MaxHumanityCap = 500,
 
@@ -55,6 +57,30 @@ CYBERWARE.Config = {
         Vamp        = 0.25,
         KillHeal    = 50,
         CDRefund    = 6,
+    },
+
+    -- Последствия психоза для игрового процесса
+    Psychosis = {
+        DamageBonus = 0.10,        -- киберпсихоз и выше: +10% исходящего урона
+        SpreadPenalty = 1.25,      -- киберпсихоз и выше: разброс ×1.25 (руки дрожат)
+        EpisodeChance = 0.05,      -- терминальная стадия: шанс приступа за тик
+        EpisodeDuration = 8,
+        EpisodeCooldown = 60,
+        EpisodeMelee = 0.30,       -- приступ: +30% урона в ближнем бою
+        EpisodeSpeed = 0.15,       -- приступ: +15% скорости
+        EpisodeArmor = 0.10,       -- приступ: −10% входящего урона
+        WitnessRadius = 800,       -- игроки в радиусе видят сообщение о приступе
+    },
+
+    -- Чёрный заслон: скрипты из-за Заслона дают «порчу», которая временно отнимает человечность
+    Blackwall = {
+        HumanityPerPoint = 0.5,    -- 1 ед. порчи = −0.5 человечности
+        DecayDelay = 20,           -- порча начинает спадать через N сек после последнего прорыва
+        DecayPerSec = 0.35,
+        Max = 100,                 -- при достижении — перегрузка
+        OverloadResetTo = 60,
+        OverloadDamage = 35,
+        OverloadEMP = 5,
     },
 
     RegenTick = 1.5,         -- период пассивной регенерации (сек)
@@ -110,399 +136,404 @@ CYBERWARE.ActionNames = {
 CYBERWARE.Implants = {
     -- ================= ОПЕРАЦИОННЫЕ СИСТЕМЫ (1 слот) =================
     ["sandy_dynalar_t1"] = {
-        name = "Сандевистан «Дайналар МК.1»", slot = "OS", tier = 1, humanity = 6, active = "OS",
+        name = "Сандевистан «Дайналар МК.1»", slot = "OS", tier = 1, humanity = 10, active = "OS",
         cooldown = 30, duration = 5, speedBonus = 0.30, dmgDodge = 0.20,
         desc = "Бюджетный ускоритель нейронов. Мир замедляется, ты — нет. Повторное нажатие отключает досрочно и частично возвращает перезарядку.",
     },
     ["sandy_zetatech_t3"] = {
-        name = "Сандевистан «Зетатех МК.3»", slot = "OS", tier = 3, humanity = 10, active = "OS",
+        name = "Сандевистан «Зетатех МК.3»", slot = "OS", tier = 3, humanity = 15, active = "OS",
         cooldown = 26, duration = 6, speedBonus = 0.45, dmgDodge = 0.30,
         desc = "Надёжная военная модель с неоновым шлейфом остаточных образов.",
     },
     ["sandy_falcon_t4"] = {
-        name = "Сандевистан «Милитех Фалкон МК.4»", slot = "OS", tier = 4, humanity = 12, active = "OS",
+        name = "Сандевистан «Милитех Фалкон МК.4»", slot = "OS", tier = 4, humanity = 18, active = "OS",
         cooldown = 24, duration = 7, speedBonus = 0.55, dmgDodge = 0.35, killExtend = 1,
         desc = "Тактическая версия для спецподразделений Милитеха. Каждое убийство продлевает ускорение.",
     },
     ["sandevistan_apogee"] = {
-        name = "Сандевистан «Милитех Апогей МК.5»", slot = "OS", tier = 5, humanity = 14, active = "OS",
+        name = "Сандевистан «Милитех Апогей МК.5»", slot = "OS", tier = 5, humanity = 22, active = "OS",
         cooldown = 22, duration = 8, speedBonus = 0.65, dmgDodge = 0.40, killExtend = 2,
         desc = "Культовый имплант. Абсолютное превосходство в скорости — пока нейросеть выдерживает нагрузку.",
     },
     ["sandy_warp_dancer"] = {
-        name = "Сандевистан «Квиант Варп-Дансер МК.5»", slot = "OS", tier = 5, humanity = 14, active = "OS",
+        name = "Сандевистан «Квиант Варп-Дансер МК.5»", slot = "OS", tier = 5, humanity = 22, active = "OS",
         cooldown = 26, duration = 6, speedBonus = 0.60, dmgDodge = 0.35, killExtend = 1, sandyKillHeal = 0.10,
         desc = "Экспериментальная разработка Квиант. Убийства в ускорении подпитывают организм.",
     },
     ["berserk_moore_t2"] = {
-        name = "Берсерк «Мур Текнолоджиз МК.2»", slot = "OS", tier = 2, humanity = 8, active = "OS",
+        name = "Берсерк «Мур Текнолоджиз МК.2»", slot = "OS", tier = 2, humanity = 12, active = "OS",
         cooldown = 40, duration = 6, meleeMult = 1.30, berserkArmor = 0.10, slamWave = false,
         desc = "Боевой стимулятор: тело отказывается умирать, пока работает имплант.",
     },
     ["berserk_biodyne_t4"] = {
-        name = "Берсерк «Биодайн МК.4»", slot = "OS", tier = 4, humanity = 12, active = "OS",
+        name = "Берсерк «Биодайн МК.4»", slot = "OS", tier = 4, humanity = 18, active = "OS",
         cooldown = 36, duration = 7, meleeMult = 1.45, berserkArmor = 0.15, slamWave = true,
         desc = "Укреплённые сервоприводы позволяют обрушиваться на врагов с высоты.",
     },
     ["berserk_militech"] = {
-        name = "Берсерк «Милитех Рейнджер МК.5»", slot = "OS", tier = 5, humanity = 14, active = "OS",
+        name = "Берсерк «Милитех Рейнджер МК.5»", slot = "OS", tier = 5, humanity = 22, active = "OS",
         cooldown = 34, duration = 8, meleeMult = 1.60, berserkArmor = 0.20, slamWave = true,
         desc = "Армейский берсерк. Превращает носителя в живой таран.",
     },
     ["cyberdeck_biotech_t2"] = {
-        name = "Кибердека «Биотех Сигма МК.2»", slot = "OS", tier = 2, humanity = 8, active = "Quickhack",
+        name = "Кибердека «Биотех Сигма МК.2»", slot = "OS", tier = 2, humanity = 12, active = "Quickhack",
         ram = 6, ramRegen = 0.5, hackRange = 800, hackDmgMult = 1.0, cdMult = 1.0,
         desc = "Гражданская дека начального уровня. Скрипты расходуют ОЗУ, которое восстанавливается со временем.",
     },
     ["cyberdeck_paraline_t3"] = {
-        name = "Кибердека «Милитех Паралайн МК.3»", slot = "OS", tier = 3, humanity = 10, active = "Quickhack",
+        name = "Кибердека «Милитех Паралайн МК.3»", slot = "OS", tier = 3, humanity = 15, active = "Quickhack",
         ram = 8, ramRegen = 0.6, hackRange = 900, hackDmgMult = 1.10, cdMult = 0.90,
         desc = "Сбалансированная военная дека с расширенным буфером памяти.",
     },
     ["cyberdeck_arasaka_t4"] = {
-        name = "Кибердека «Арасака Тень МК.4»", slot = "OS", tier = 4, humanity = 12, active = "Quickhack",
+        name = "Кибердека «Арасака Тень МК.4»", slot = "OS", tier = 4, humanity = 18, active = "Quickhack",
         ram = 10, ramRegen = 0.7, hackRange = 1000, hackDmgMult = 1.20, cdMult = 0.80,
         desc = "Корпоративная дека для тихих операций.",
     },
     ["cyberdeck_tetratronic_t4"] = {
-        name = "Кибердека «Тетратроник Риплер МК.4»", slot = "OS", tier = 4, humanity = 12, active = "Quickhack",
+        name = "Кибердека «Тетратроник Риплер МК.4»", slot = "OS", tier = 4, humanity = 18, active = "Quickhack",
         ram = 9, ramRegen = 0.8, hackRange = 950, hackDmgMult = 1.30, cdMult = 0.90,
         desc = "Дека для агрессивного взлома: меньше памяти, больше урона.",
     },
     ["cyberdeck_netwatch"] = {
-        name = "Кибердека «Сетевой Дозор МК.5»", slot = "OS", tier = 5, humanity = 14, active = "Quickhack",
+        name = "Кибердека «Сетевой Дозор МК.5»", slot = "OS", tier = 5, humanity = 22, active = "Quickhack",
         ram = 13, ramRegen = 0.9, hackRange = 1200, hackDmgMult = 1.35, cdMult = 0.70,
         desc = "Легендарная дека агентов Сетевого Дозора.",
+    },
+    ["cyberdeck_blackwall_gateway"] = {
+        name = "Кибердека «Шлюз Чёрного заслона» МК.5", slot = "OS", tier = 5, humanity = 22, active = "Quickhack",
+        ram = 12, ramRegen = 0.9, hackRange = 1150, hackDmgMult = 1.40, cdMult = 0.80, blackwallMult = 0.5,
+        desc = "Реликт из-за Заслона. Усиливает скрипты Чёрного заслона и вдвое снижает получаемую от них порчу — но голоса за Заслоном не умолкают.",
     },
 
     -- ================= ОПТИКА (1 слот) =================
     ["kiroshi_basic_t1"] = {
-        name = "Оптика «Кироши Базовая МК.1»", slot = "OCULAR", tier = 1, humanity = 2, active = "Kiroshi",
+        name = "Оптика «Кироши Базовая МК.1»", slot = "OCULAR", tier = 1, humanity = 4, active = "Kiroshi",
         cooldown = 20, duration = 4, headMult = 1.15, scanRange = 1500,
         desc = "Подсвечивает живые цели сквозь стены и показывает их состояние.",
     },
     ["kiroshi_clairvoyant_t2"] = {
-        name = "Оптика «Кироши Ясновидящий МК.2»", slot = "OCULAR", tier = 2, humanity = 3, active = "Kiroshi",
+        name = "Оптика «Кироши Ясновидящий МК.2»", slot = "OCULAR", tier = 2, humanity = 5, active = "Kiroshi",
         cooldown = 18, duration = 5, headMult = 1.20, headPassive = 0.05, scanRange = 1800,
         desc = "Улучшенная матрица захвата с пассивным анализом уязвимых зон.",
     },
     ["kiroshi_sentry_t3"] = {
-        name = "Оптика «Кироши Часовой МК.3»", slot = "OCULAR", tier = 3, humanity = 4, active = "Kiroshi",
+        name = "Оптика «Кироши Часовой МК.3»", slot = "OCULAR", tier = 3, humanity = 7, active = "Kiroshi",
         cooldown = 16, duration = 6, headMult = 1.25, headPassive = 0.08, scanRange = 2200,
         desc = "Военная оптика с расширенным спектром сканирования.",
     },
     ["kiroshi_oracle_t4"] = {
-        name = "Оптика «Кироши Оракул МК.4»", slot = "OCULAR", tier = 4, humanity = 5, active = "Kiroshi",
+        name = "Оптика «Кироши Оракул МК.4»", slot = "OCULAR", tier = 4, humanity = 8, active = "Kiroshi",
         cooldown = 15, duration = 7, headMult = 1.30, headPassive = 0.10, scanRange = 2600,
         desc = "Высокоточный спектральный анализатор.",
     },
     ["kiroshi_stalker"] = {
-        name = "Оптика «Кироши Кокатрис МК.5»", slot = "OCULAR", tier = 5, humanity = 6, active = "Kiroshi",
+        name = "Оптика «Кироши Кокатрис МК.5»", slot = "OCULAR", tier = 5, humanity = 10, active = "Kiroshi",
         cooldown = 14, duration = 8, headMult = 1.40, headPassive = 0.15, scanRange = 3200,
         desc = "Культовый анализатор уязвимостей.",
     },
 
     -- ================= РУКИ (2 слота) =================
     ["grip_boost_t1"] = {
-        name = "Сервоприводы ладоней МК.1", slot = "ARMS", tier = 1, humanity = 2,
+        name = "Сервоприводы ладоней МК.1", slot = "ARMS", tier = 1, humanity = 4,
         meleeBonus = 0.15, gunBonus = 0.03, spreadMult = 0.90, knockback = 120,
         desc = "Усиленный хват для оружия и кулаков.",
     },
     ["shock_absorber_t2"] = {
-        name = "Амортизатор отдачи «Вектор МК.2»", slot = "ARMS", tier = 2, humanity = 3,
+        name = "Амортизатор отдачи «Вектор МК.2»", slot = "ARMS", tier = 2, humanity = 6,
         gunBonus = 0.08, spreadMult = 0.75,
         desc = "Гасит отдачу и стабилизирует ствол.",
     },
     ["knuckles_titanium_t2"] = {
-        name = "Титановые кастеты МК.2", slot = "ARMS", tier = 2, humanity = 3,
+        name = "Титановые кастеты МК.2", slot = "ARMS", tier = 2, humanity = 6,
         meleeBonus = 0.25, knockback = 200,
         desc = "Утяжелённые суставы кулаков отбрасывают противника.",
     },
     ["ballistic_coprocessor"] = {
-        name = "Баллистический сопроцессор «Канг-Тао МК.3»", slot = "ARMS", tier = 3, humanity = 4,
+        name = "Баллистический сопроцессор «Канг-Тао МК.3»", slot = "ARMS", tier = 3, humanity = 8,
         gunBonus = 0.12, spreadMult = 0.65,
         desc = "Рассчитывает траекторию каждого выстрела.",
     },
     ["microgenerator_t3"] = {
-        name = "Микрогенератор ладони «Зетатех МК.3»", slot = "ARMS", tier = 3, humanity = 4,
+        name = "Микрогенератор ладони «Зетатех МК.3»", slot = "ARMS", tier = 3, humanity = 8,
         meleeBonus = 0.12, gunBonus = 0.06, shockDmg = 4,
         desc = "Насыщает каждую атаку электрическим импульсом.",
     },
     ["monowire_t3"] = {
-        name = "Моноструна «Кан Тао МК.3»", slot = "ARMS", tier = 3, humanity = 4,
+        name = "Моноструна «Кан Тао МК.3»", slot = "ARMS", tier = 3, humanity = 8,
         meleeBonus = 0.15, chainShock = 0.35, chainTargets = 2,
         desc = "Мономолекулярная нить: удары в ближнем бою перескакивают разрядом на соседние цели.",
     },
     ["gorilla_arms"] = {
-        name = "Руки Гориллы МК.4", slot = "ARMS", tier = 4, humanity = 6,
+        name = "Руки Гориллы МК.4", slot = "ARMS", tier = 4, humanity = 11,
         meleeBonus = 0.45, spreadMult = 0.85, knockback = 320,
         desc = "Сокрушительная сила в каждом ударе.",
     },
     ["mantis_blades_t4"] = {
-        name = "Клинки Богомола «Арасака МК.4»", slot = "ARMS", tier = 4, humanity = 6,
+        name = "Клинки Богомола «Арасака МК.4»", slot = "ARMS", tier = 4, humanity = 11,
         meleeBonus = 0.35, bleedDps = 8, bleedTime = 3,
         desc = "Выдвижные клинки из предплечий. Удары в ближнем бою вызывают кровотечение.",
     },
     ["projectile_launcher_t4"] = {
-        name = "Ракетная система «Милитех МК.4»", slot = "ARMS", tier = 4, humanity = 6, active = "Arms",
+        name = "Ракетная система «Милитех МК.4»", slot = "ARMS", tier = 4, humanity = 11, active = "Arms",
         cooldown = 14, launcherDmg = 70, launcherRadius = 180, gunBonus = 0.03,
         desc = "Встроенная в предплечье пусковая установка. Выпускает разрывной снаряд в точку прицела.",
     },
     ["immovable_force_t4"] = {
-        name = "Стабилизатор «Неодолимая Сила МК.4»", slot = "ARMS", tier = 4, humanity = 6,
+        name = "Стабилизатор «Неодолимая Сила МК.4»", slot = "ARMS", tier = 4, humanity = 11,
         gunBonus = 0.18, spreadMult = 0.50,
         desc = "Гироскопический компенсатор плеча.",
     },
     ["gorilla_arms_t5"] = {
-        name = "Руки Гориллы «Джаггернаут МК.5»", slot = "ARMS", tier = 5, humanity = 8,
+        name = "Руки Гориллы «Джаггернаут МК.5»", slot = "ARMS", tier = 5, humanity = 14,
         meleeBonus = 0.70, gunBonus = 0.05, spreadMult = 0.80, knockback = 450,
         desc = "Культовые руки. Враги разлетаются как кегли.",
     },
     ["smart_link_t5"] = {
-        name = "Нейро-матрица стрелка «Арасака МК.5»", slot = "ARMS", tier = 5, humanity = 8,
+        name = "Нейро-матрица стрелка «Арасака МК.5»", slot = "ARMS", tier = 5, humanity = 14,
         gunBonus = 0.25, spreadMult = 0.35,
         desc = "Прямая синаптическая связь с оружием.",
     },
 
     -- ================= НЕРВНАЯ СИСТЕМА (2 слота) =================
     ["kerenzikov_t1"] = {
-        name = "Керензиков «Базовый МК.1»", slot = "NERVOUS", tier = 1, humanity = 2, active = "Kerenzikov",
+        name = "Керензиков «Базовый МК.1»", slot = "NERVOUS", tier = 1, humanity = 4, active = "Kerenzikov",
         cooldown = 8, dashPower = 650, dodgeTime = 0.25,
         desc = "Рывок в сторону движения с кратковременной неуязвимостью к пулям.",
     },
     ["tyrosine_injector_t1"] = {
-        name = "Тирозиновый инъектор МК.1", slot = "NERVOUS", tier = 1, humanity = 2,
+        name = "Тирозиновый инъектор МК.1", slot = "NERVOUS", tier = 1, humanity = 4,
         passiveDodge = 0.04, speedPassive = 0.04,
         desc = "Ускоряет передачу нервных импульсов.",
     },
     ["reflex_tuner_t2"] = {
-        name = "Рефлекторный тюнер «Инстинкты МК.2»", slot = "NERVOUS", tier = 2, humanity = 3,
+        name = "Рефлекторный тюнер «Инстинкты МК.2»", slot = "NERVOUS", tier = 2, humanity = 6,
         passiveDodge = 0.07,
         desc = "Нейро-ускоритель реакций.",
     },
     ["atomic_sensors_t2"] = {
-        name = "Атомные датчики движения МК.2", slot = "NERVOUS", tier = 2, humanity = 3,
+        name = "Атомные датчики движения МК.2", slot = "NERVOUS", tier = 2, humanity = 6,
         passiveDodge = 0.04, speedPassive = 0.06,
         desc = "Датчики предугадывают движения противника.",
     },
     ["kerenzikov_t3"] = {
-        name = "Керензиков «Рефлекс МК.3»", slot = "NERVOUS", tier = 3, humanity = 4, active = "Kerenzikov",
+        name = "Керензиков «Рефлекс МК.3»", slot = "NERVOUS", tier = 3, humanity = 8, active = "Kerenzikov",
         cooldown = 6.5, dashPower = 760, dodgeTime = 0.35,
         desc = "Мощный тактический рывок.",
     },
     ["neofiber_t3"] = {
-        name = "Неоволокно МК.3", slot = "NERVOUS", tier = 3, humanity = 4,
+        name = "Неоволокно МК.3", slot = "NERVOUS", tier = 3, humanity = 8,
         passiveDodge = 0.08, speedPassive = 0.05,
         desc = "Синтетические мышечные волокна.",
     },
     ["self_ice_t3"] = {
-        name = "Само-ЛЁД «Арасака МК.3»", slot = "NERVOUS", tier = 3, humanity = 4,
+        name = "Само-ЛЁД «Арасака МК.3»", slot = "NERVOUS", tier = 3, humanity = 8,
         selfIce = true, cooldown = 45,
         desc = "Нейро-файрвол. Полностью блокирует вражеский скрипт, после чего перезагружается.",
     },
     ["synaptic_accelerator_t4"] = {
-        name = "Синаптический ускоритель МК.4", slot = "NERVOUS", tier = 4, humanity = 6,
+        name = "Синаптический ускоритель МК.4", slot = "NERVOUS", tier = 4, humanity = 11,
         passiveDodge = 0.11,
         desc = "Предугадывает траекторию стрельбы врага.",
     },
     ["deep_field_visual_t4"] = {
-        name = "Сенсор глубокого поля «Милитех МК.4»", slot = "NERVOUS", tier = 4, humanity = 6,
+        name = "Сенсор глубокого поля «Милитех МК.4»", slot = "NERVOUS", tier = 4, humanity = 11,
         passiveDodge = 0.07, speedPassive = 0.07,
         desc = "Координирует моторику в бою.",
     },
     ["kerenzikov_prime"] = {
-        name = "Керензиков «Вектор МК.5»", slot = "NERVOUS", tier = 5, humanity = 8, active = "Kerenzikov",
+        name = "Керензиков «Вектор МК.5»", slot = "NERVOUS", tier = 5, humanity = 14, active = "Kerenzikov",
         cooldown = 5, dashPower = 860, dodgeTime = 0.50,
         desc = "Сверхзвуковой рывок с полным уклонением от очередей во время полёта.",
     },
     ["revulsor_t5"] = {
-        name = "Ревульсор МК.5", slot = "NERVOUS", tier = 5, humanity = 8,
+        name = "Ревульсор МК.5", slot = "NERVOUS", tier = 5, humanity = 14,
         passiveDodge = 0.13, speedPassive = 0.08,
         desc = "Вершина нейро-инженерии.",
     },
 
     -- ================= СКЕЛЕТ (3 слота) =================
     ["titanium_bones_t1"] = {
-        name = "Титановые кости МК.1", slot = "SKELETON", tier = 1, humanity = 2,
+        name = "Титановые кости МК.1", slot = "SKELETON", tier = 1, humanity = 4,
         fallMult = 0.5, speedPassive = 0.03,
         desc = "Облегчённый и прочный каркас.",
     },
     ["universal_booster_t1"] = {
-        name = "Усилитель костной ткани МК.1", slot = "SKELETON", tier = 1, humanity = 2,
+        name = "Усилитель костной ткани МК.1", slot = "SKELETON", tier = 1, humanity = 4,
         bonusHP = 10, speedPassive = 0.02,
         desc = "Укрепляет грудную клетку.",
     },
     ["bionic_joints_t2"] = {
-        name = "Бионические суставы МК.2", slot = "SKELETON", tier = 2, humanity = 3,
+        name = "Бионические суставы МК.2", slot = "SKELETON", tier = 2, humanity = 6,
         speedPassive = 0.05, meleeResist = 0.10,
         desc = "Подвижные и прочные суставы.",
     },
     ["spring_joints_t2"] = {
-        name = "Пружинные сочленения МК.2", slot = "SKELETON", tier = 2, humanity = 3,
+        name = "Пружинные сочленения МК.2", slot = "SKELETON", tier = 2, humanity = 6,
         bonusHP = 15, armor = 0.04,
         desc = "Амортизируют кинетические удары.",
     },
     ["reinforced_tendons_t2"] = {
-        name = "Усиленные сухожилия МК.2", slot = "SKELETON", tier = 2, humanity = 3,
+        name = "Усиленные сухожилия МК.2", slot = "SKELETON", tier = 2, humanity = 6,
         doubleJump = true, fallMult = 0.75,
         desc = "Позволяют оттолкнуться повторно прямо в воздухе (ПРОБЕЛ в прыжке).",
     },
     ["lynx_paws_t2"] = {
-        name = "Рысьи лапы МК.2", slot = "SKELETON", tier = 2, humanity = 3,
+        name = "Рысьи лапы МК.2", slot = "SKELETON", tier = 2, humanity = 6,
         silentSteps = true, speedPassive = 0.03,
         desc = "Мягкие амортизаторы стоп: ваши шаги не слышно.",
     },
     ["fortified_ankles"] = {
-        name = "Укреплённые лодыжки «Гидро-прыжок МК.3»", slot = "SKELETON", tier = 3, humanity = 4,
+        name = "Укреплённые лодыжки «Гидро-прыжок МК.3»", slot = "SKELETON", tier = 3, humanity = 8,
         fallMult = 0, speedPassive = 0.03, jumpCharge = true, jumpMult = 1.4,
         desc = "Зажмите ПРОБЕЛ, чтобы накопить заряд гидравлики для высокого прыжка.",
     },
     ["scarab_carapace_t3"] = {
-        name = "Корсет «Скарабей МК.3»", slot = "SKELETON", tier = 3, humanity = 4,
+        name = "Корсет «Скарабей МК.3»", slot = "SKELETON", tier = 3, humanity = 8,
         bonusHP = 20, armor = 0.06,
         desc = "Внутренний бронекаркас позвоночника.",
     },
     ["jenkins_tendons_t3"] = {
-        name = "Сухожилия Дженкинса МК.3", slot = "SKELETON", tier = 3, humanity = 4,
+        name = "Сухожилия Дженкинса МК.3", slot = "SKELETON", tier = 3, humanity = 8,
         speedPassive = 0.10,
         desc = "Синтетические сухожилия для максимальной скорости бега.",
     },
     ["dense_marrow_t4"] = {
-        name = "Плотный костный мозг МК.4", slot = "SKELETON", tier = 4, humanity = 6,
+        name = "Плотный костный мозг МК.4", slot = "SKELETON", tier = 4, humanity = 11,
         speedPassive = 0.04, meleeBonus = 0.20,
         desc = "Утяжеляет удары в ближнем бою.",
     },
     ["para_bellum_t4"] = {
-        name = "Эндоскелет «Пара Беллум МК.4»", slot = "SKELETON", tier = 4, humanity = 6,
+        name = "Эндоскелет «Пара Беллум МК.4»", slot = "SKELETON", tier = 4, humanity = 11,
         bonusHP = 30, meleeResist = 0.15, armor = 0.06,
         desc = "Тяжёлое укрепление скелета.",
     },
     ["epimorphic_skeleton_t5"] = {
-        name = "Эндоскелет «Эпиморфик МК.5»", slot = "SKELETON", tier = 5, humanity = 8,
+        name = "Эндоскелет «Эпиморфик МК.5»", slot = "SKELETON", tier = 5, humanity = 14,
         bonusHP = 25, fallMult = 0, speedPassive = 0.08, jumpCharge = true, jumpMult = 1.8,
         desc = "Максимальная мощь гидро-прыжка и подвижность.",
     },
     ["atlas_frame_t5"] = {
-        name = "Титановый каркас «Атлант МК.5»", slot = "SKELETON", tier = 5, humanity = 8,
+        name = "Титановый каркас «Атлант МК.5»", slot = "SKELETON", tier = 5, humanity = 14,
         bonusHP = 40, meleeBonus = 0.25, armor = 0.08,
         desc = "Культовый военный эндоскелет.",
     },
 
     -- ================= КРОВООБРАЩЕНИЕ (3 слота) =================
     ["biomonitor_t1"] = {
-        name = "Биомонитор МК.1", slot = "CIRCULATORY", tier = 1, humanity = 2,
+        name = "Биомонитор МК.1", slot = "CIRCULATORY", tier = 1, humanity = 4,
         healThreshold = 0.35, healAmount = 25, cooldown = 50,
         desc = "Автоматическая инъекция при критическом состоянии.",
     },
     ["adrenaline_booster_t1"] = {
-        name = "Адреналиновый стимулятор МК.1", slot = "CIRCULATORY", tier = 1, humanity = 2,
+        name = "Адреналиновый стимулятор МК.1", slot = "CIRCULATORY", tier = 1, humanity = 4,
         killHeal = 15,
         desc = "Выброс адреналина после каждого устранения.",
     },
     ["heal_on_kill_t2"] = {
-        name = "Синтетический кардиостимулятор МК.2", slot = "CIRCULATORY", tier = 2, humanity = 3,
+        name = "Синтетический кардиостимулятор МК.2", slot = "CIRCULATORY", tier = 2, humanity = 6,
         regen = 1,
         desc = "Ускоряет метаболизм вне боя.",
     },
     ["blood_pump_t2"] = {
-        name = "Кровяной насос «Биодайн МК.2»", slot = "CIRCULATORY", tier = 2, humanity = 3,
+        name = "Кровяной насос «Биодайн МК.2»", slot = "CIRCULATORY", tier = 2, humanity = 6,
         healThreshold = 0.40, healAmount = 40, cooldown = 40,
         desc = "Экстренный впрыск плазмы.",
     },
     ["adrenaline_converter"] = {
-        name = "Адреналиновый конвертер «Дайналар МК.3»", slot = "CIRCULATORY", tier = 3, humanity = 4,
+        name = "Адреналиновый конвертер «Дайналар МК.3»", slot = "CIRCULATORY", tier = 3, humanity = 8,
         killHeal = 25, cdRefund = 3,
         desc = "Превращает каждое убийство в топливо для организма и ОС.",
     },
     ["feedback_circuit_t3"] = {
-        name = "Контур обратной связи МК.3", slot = "CIRCULATORY", tier = 3, humanity = 4,
+        name = "Контур обратной связи МК.3", slot = "CIRCULATORY", tier = 3, humanity = 8,
         vamp = 0.05, regen = 1,
         desc = "Преобразует боль врагов в биоэнергию.",
     },
     ["micro_rotors_t4"] = {
-        name = "Микророторы кровотока МК.4", slot = "CIRCULATORY", tier = 4, humanity = 6,
+        name = "Микророторы кровотока МК.4", slot = "CIRCULATORY", tier = 4, humanity = 11,
         regen = 2,
         desc = "Насыщает кровь кислородом.",
     },
     ["bioconductor_t4"] = {
-        name = "Биопроводник «Милитех МК.4»", slot = "CIRCULATORY", tier = 4, humanity = 6,
+        name = "Биопроводник «Милитех МК.4»", slot = "CIRCULATORY", tier = 4, humanity = 11,
         killHeal = 20, cdRefund = 4, vamp = 0.05,
         desc = "Боевой метаболический ускоритель.",
     },
     ["blood_pump_shock"] = {
-        name = "Кровяной насос с электроконденсатором МК.5", slot = "CIRCULATORY", tier = 5, humanity = 8,
+        name = "Кровяной насос с электроконденсатором МК.5", slot = "CIRCULATORY", tier = 5, humanity = 14,
         healThreshold = 0.45, healAmount = 60, cooldown = 45, pumpShock = 30, vampBurst = 6,
         desc = "Экстренное лечение с электроразрядом по врагам вокруг и кратковременным вампиризмом.",
     },
     ["isometric_stabilizer_t5"] = {
-        name = "Электролит-Сердце МК.5", slot = "CIRCULATORY", tier = 5, humanity = 8,
+        name = "Электролит-Сердце МК.5", slot = "CIRCULATORY", tier = 5, humanity = 14,
         regen = 3, vamp = 0.10,
         desc = "Культовая система жизнеобеспечения.",
     },
     ["second_heart_t5"] = {
-        name = "Второе сердце МК.5", slot = "CIRCULATORY", tier = 5, humanity = 8,
+        name = "Второе сердце МК.5", slot = "CIRCULATORY", tier = 5, humanity = 14,
         secondHeart = true, cooldown = 240,
         desc = "Резервное сердце. При смертельном уроне мгновенно возвращает к жизни с полным здоровьем.",
     },
 
     -- ================= КОЖА И БРОНЯ (3 слота) =================
     ["subdermal_t1"] = {
-        name = "Подкожная броня МК.1", slot = "INTEGUMENTARY", tier = 1, humanity = 2,
+        name = "Подкожная броня МК.1", slot = "INTEGUMENTARY", tier = 1, humanity = 4,
         bonusHP = 15, armor = 0.05,
         desc = "Базовая подкожная защита.",
     },
     ["carapace_light_t1"] = {
-        name = "Термостойкое покрытие кожи МК.1", slot = "INTEGUMENTARY", tier = 1, humanity = 2,
+        name = "Термостойкое покрытие кожи МК.1", slot = "INTEGUMENTARY", tier = 1, humanity = 4,
         bonusHP = 10, armor = 0.03, fireResist = 0.60,
         desc = "Огнеупорный слой эпидермиса.",
     },
     ["subdermal_t2"] = {
-        name = "Армированная кожа «Панцирь МК.2»", slot = "INTEGUMENTARY", tier = 2, humanity = 3,
+        name = "Армированная кожа «Панцирь МК.2»", slot = "INTEGUMENTARY", tier = 2, humanity = 6,
         bonusHP = 25, armor = 0.07,
         desc = "Многослойная защита кожи.",
     },
     ["grounded_plating_t2"] = {
-        name = "Заземляющая обшивка МК.2", slot = "INTEGUMENTARY", tier = 2, humanity = 3,
+        name = "Заземляющая обшивка МК.2", slot = "INTEGUMENTARY", tier = 2, humanity = 6,
         bonusHP = 20, armor = 0.05, shockResist = 0.50,
         desc = "Отводит электрические разряды в землю.",
     },
     ["subdermal_carapace"] = {
-        name = "Карбоновый подкожный панцирь МК.3", slot = "INTEGUMENTARY", tier = 3, humanity = 4,
+        name = "Карбоновый подкожный панцирь МК.3", slot = "INTEGUMENTARY", tier = 3, humanity = 8,
         bonusHP = 35, armor = 0.09, fireResist = 0.50,
         desc = "Лёгкий карбоновый панцирь.",
     },
     ["nano_plating_t3"] = {
-        name = "Нанопластины «Отражатель МК.3»", slot = "INTEGUMENTARY", tier = 3, humanity = 4,
+        name = "Нанопластины «Отражатель МК.3»", slot = "INTEGUMENTARY", tier = 3, humanity = 8,
         bonusHP = 30, armor = 0.07, reflectChance = 0.06,
         desc = "Пластины под углом заставляют пули рикошетить.",
     },
     ["optical_camo_t3"] = {
-        name = "Оптический камуфляж «Сэндайрен МК.3»", slot = "INTEGUMENTARY", tier = 3, humanity = 4, active = "Camo",
+        name = "Оптический камуфляж «Сэндайрен МК.3»", slot = "INTEGUMENTARY", tier = 3, humanity = 8, active = "Camo",
         camo = true, duration = 5, cooldown = 35,
         desc = "Делает вас почти невидимым. NPC теряют цель. Атака снимает маскировку.",
     },
     ["supradermal_t4"] = {
-        name = "Нано-обшивка «Супрадерм МК.4»", slot = "INTEGUMENTARY", tier = 4, humanity = 6,
+        name = "Нано-обшивка «Супрадерм МК.4»", slot = "INTEGUMENTARY", tier = 4, humanity = 11,
         bonusHP = 50, armor = 0.11, fireResist = 0.75, regen = 1,
         desc = "Самовосстанавливающееся покрытие.",
     },
     ["pain_editor_t4"] = {
-        name = "Редактор боли «Арасака МК.4»", slot = "INTEGUMENTARY", tier = 4, humanity = 6,
+        name = "Редактор боли «Арасака МК.4»", slot = "INTEGUMENTARY", tier = 4, humanity = 11,
         bonusHP = 40, armor = 0.13,
         desc = "Блокирует болевые рецепторы.",
     },
     ["optical_camo_t5"] = {
-        name = "Оптический камуфляж «Арасака Призрак МК.5»", slot = "INTEGUMENTARY", tier = 5, humanity = 8, active = "Camo",
+        name = "Оптический камуфляж «Арасака Призрак МК.5»", slot = "INTEGUMENTARY", tier = 5, humanity = 14, active = "Camo",
         camo = true, duration = 8, cooldown = 28, armor = 0.04,
         desc = "Совершенная активная маскировка корпоративных шиноби.",
     },
     ["chitin_shell_t5"] = {
-        name = "Хитиновый панцирь «Милитех МК.5»", slot = "INTEGUMENTARY", tier = 5, humanity = 8,
+        name = "Хитиновый панцирь «Милитех МК.5»", slot = "INTEGUMENTARY", tier = 5, humanity = 14,
         bonusHP = 65, armor = 0.14, fireResist = 1.0, regen = 1,
         desc = "Тяжёлая биоброня.",
     },
     ["cellular_adapter_t5"] = {
-        name = "Клеточный адаптер МК.5", slot = "INTEGUMENTARY", tier = 5, humanity = 8,
+        name = "Клеточный адаптер МК.5", slot = "INTEGUMENTARY", tier = 5, humanity = 14,
         bonusHP = 60, armor = 0.12, fireResist = 1.0, shockResist = 0.50, regen = 2,
         desc = "Культовая защита от любых стихий.",
     },
@@ -568,13 +599,26 @@ CYBERWARE.Quickhacks = {
         damage = 150,
         desc = "NPC с запасом здоровья до 150 отключается мгновенно, иначе — 150 ед. урона. Игрок: 60 ед. урона, ЭМИ 3 сек и помехи.",
     },
+
+    -- ===== ЧЁРНЫЙ ЗАСЛОН: мощные скрипты ценой порчи (снижает человечность) =====
+    ["blackwall_whisper"] = {
+        name = "Шёпот из-за Заслона", ram = 5, cooldown = 25, defaultUnlocked = false, kind = "blackwall", order = 13,
+        playersOnly = true, corruption = 15, targetCorruption = 30,
+        desc = "Впускает в разум цели голоса диких ИИ: +30 порчи цели, галлюцинации и помехи на 5 сек.",
+    },
+    ["blackwall_breach"] = {
+        name = "Прорыв Чёрного заслона", ram = 8, cooldown = 40, defaultUnlocked = false, kind = "blackwall", order = 14,
+        damage = 110, splash = 45, corruption = 30,
+        desc = "Обрушивает на цель код из-за Заслона: 110 ед. урона и 45 ед. всем рядом (радиус 260). Самый опасный скрипт в сети.",
+    },
 }
 
 CYBERWARE.HackKindColors = {
-    damage   = Color(255, 80, 80),
-    control  = Color(80, 200, 255),
-    covert   = Color(80, 255, 170),
-    ultimate = Color(255, 190, 30),
+    damage    = Color(255, 80, 80),
+    control   = Color(80, 200, 255),
+    covert    = Color(80, 255, 170),
+    ultimate  = Color(255, 190, 30),
+    blackwall = Color(230, 20, 50),
 }
 
 --[[
@@ -608,6 +652,9 @@ CYBERWARE.Sounds = {
     double_jump   = { { "weapons/iceaxe/iceaxe_swing1.wav", pitch = { 110, 120 }, vol = 0.6 }, { "npc/scanner/scanner_nearmiss2.wav", pitch = { 140, 150 }, vol = 0.35 } },
     self_ice      = { { "npc/turret_floor/deploy.wav", pitch = { 135, 145 }, vol = 0.7 }, { "ambient/energy/whiteflash.wav", pitch = { 160, 170 }, vol = 0.4 } },
     denied        = { { "buttons/combine_button_locked.wav", pitch = { 115, 125 }, vol = 0.5, level = 60 } },
+    blackwall     = { { "ambient/levels/citadel/strange_talk5.wav", pitch = { 60, 70 }, vol = 0.8 }, { "ambient/levels/labs/electric_explosion1.wav", pitch = { 70, 80 }, vol = 0.7 }, { "npc/stalker/go_alert2a.wav", pitch = { 55, 65 }, vol = 0.5 } },
+    bw_overload   = { { "ambient/levels/labs/electric_explosion5.wav", pitch = { 60, 70 }, vol = 1, level = 85 }, { "npc/stalker/go_alert2a.wav", pitch = { 45, 55 }, vol = 0.8 } },
+    episode       = { { "npc/antlion_guard/angry2.wav", pitch = { 70, 80 }, vol = 0.8, level = 85 }, { "player/heartbeat1.wav", pitch = { 120, 130 }, vol = 1 } },
 }
 
 -- ================= ОБЩИЕ ФУНКЦИИ =================
@@ -722,11 +769,43 @@ function CYBERWARE:GetUsedHumanity(ply)
     return used
 end
 
+-- Порча Чёрного заслона: хранится значение + момент последнего прироста, спад считается одинаково на сервере и клиенте
+function CYBERWARE:GetBlackwall(ply)
+    if not IsValid(ply) then return 0 end
+    local bw = self.Config.Blackwall
+    local base = ply:GetNW2Float("Cyber_BW", 0)
+    if base <= 0 then return 0 end
+    local idle = CurTime() - ply:GetNW2Float("Cyber_BWStamp", 0) - bw.DecayDelay
+    return math.Clamp(base - math.max(0, idle) * bw.DecayPerSec, 0, bw.Max)
+end
+
+-- Человечность без учёта порчи (только импланты и лимит)
+function CYBERWARE:GetBaseHumanity(ply)
+    if not IsValid(ply) then return self.Config.DefaultMaxHumanity end
+    return self:GetMaxHumanity(ply) - self:GetUsedHumanity(ply)
+end
+
 function CYBERWARE:GetHumanity(ply)
     if not IsValid(ply) then return self.Config.DefaultMaxHumanity end
-    local hum = self:GetMaxHumanity(ply) - self:GetUsedHumanity(ply)
+    local hum = self:GetBaseHumanity(ply) - math.floor(self:GetBlackwall(ply) * self.Config.Blackwall.HumanityPerPoint)
     return math.Clamp(hum, self.Config.MinHumanityCap, self.Config.MaxHumanityCap)
 end
+
+-- Сколько человечности осталось до следующего порога (nil — уже терминальная стадия)
+function CYBERWARE:GetNextThreshold(hum)
+    local c = self.Config
+    if hum >= c.PsychosisStart then return hum - c.PsychosisStart + 1, 1 end
+    if hum > c.PsychosisStage2 then return hum - c.PsychosisStage2, 2 end
+    if hum > c.PsychosisTerminal then return hum - c.PsychosisTerminal, 3 end
+    return nil
+end
+
+CYBERWARE.StageHints = {
+    [0] = "Разум в норме.",
+    [1] = "Шёпот на краю сознания, помехи в оптике. Остановитесь, пока не поздно.",
+    [2] = "Галлюцинации, ярость: +10% урона, но руки дрожат (разброс ×1.25).",
+    [3] = "Неконтролируемые приступы ярости. Окружающие видят, что вы теряете себя.",
+}
 
 -- 0 — стабильно, 1 — нестабильно, 2 — киберпсихоз, 3 — терминальная стадия
 function CYBERWARE:GetPsychosisStage(hum)
@@ -860,6 +939,7 @@ function CYBERWARE:GetImplantStatLines(d)
     if d.hackRange then add("Дальность взлома: " .. d.hackRange) end
     if d.hackDmgMult and d.hackDmgMult > 1 then add("Урон скриптов: +" .. Pct(d.hackDmgMult - 1)) end
     if d.cdMult and d.cdMult < 1 then add("Перезарядка скриптов: −" .. Pct(1 - d.cdMult)) end
+    if d.blackwallMult then add("Порча Чёрного заслона: −" .. Pct(1 - d.blackwallMult)) end
 
     if d.headMult then add("Урон в голову при сканировании: +" .. Pct(d.headMult - 1)) end
     if d.headPassive then add("Пассивный урон в голову: +" .. Pct(d.headPassive)) end

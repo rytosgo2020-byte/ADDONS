@@ -8,6 +8,7 @@ for _, name in ipairs({
     "Cyberware_AdjustMaxHumanity", "Cyberware_SetMaxHumanity", "Cyberware_ClearImplants",
     "Cyberware_UseQuickhack", "Cyberware_ScreenEffect", "Cyberware_TriggerHallucination",
     "Cyberware_Notify", "Cyberware_FX", "Cyberware_Ping",
+    "Cyberware_PurgeBlackwall", "Cyberware_StageChange", "Cyberware_Episode",
 }) do
     util.AddNetworkString(name)
 end
@@ -179,6 +180,7 @@ function CYBERWARE:UpdatePlayerStats(ply)
         mult = mult + ((osImp and osImp.speedBonus) or 0.45)
     end
     if ply:GetNW2Float("Cyber_Exhausted", 0) > now then mult = mult - 0.20 end
+    if ply:GetNW2Float("Cyber_Episode_Until", 0) > now then mult = mult + self.Config.Psychosis.EpisodeSpeed end
     if ply:GetNW2Float("Cyber_Slowed_Until", 0) > now then mult = mult * 0.70 end
 
     ply:SetWalkSpeed(ply.Cyber_BaseWalk * mult)
@@ -572,6 +574,7 @@ net.Receive("Cyberware_InstallOnPlayer", function(len, ply)
     CYBERWARE:UpdatePlayerStats(target)
     CYBERWARE:SavePlayerData(target)
     WarnHumanity(target)
+    CYBERWARE:CheckStage(target)
 end)
 
 net.Receive("Cyberware_ClearImplants", function(len, ply)
@@ -756,6 +759,64 @@ HACK_EFFECTS.system_reset = function(ply, target, mult, hack)
     end
 end
 
+HACK_EFFECTS.blackwall_whisper = function(ply, target, mult, hack)
+    CYBERWARE:AddBlackwall(target, hack.targetCorruption)
+    CYBERWARE:ScreenFX(target, "blackwall", 5)
+    CYBERWARE:ScreenFX(target, "optics_glitch", 1.5)
+    CYBERWARE:PlaySound(target, "blackwall")
+    net.Start("Cyberware_TriggerHallucination")
+    net.WriteFloat(1)
+    net.Send(target)
+end
+
+HACK_EFFECTS.blackwall_breach = function(ply, target, mult, hack)
+    local deck = CYBERWARE:GetDeck(ply)
+    if deck and deck.blackwallMult then mult = mult * 1.15 end
+    CYBERWARE:PlaySound(target, "blackwall")
+    CYBERWARE:WorldFX("blackwall", target, NULL, target:WorldSpaceCenter())
+    for _, ent in ipairs(ents.FindInSphere(target:GetPos(), 260)) do
+        if ent ~= ply and ent ~= target and IsLivingTarget(ent) then
+            CYBERWARE:WorldFX("bwchain", target, ent)
+            DealDamage(ent, ply, hack.splash * mult, DMG_SHOCK)
+        end
+    end
+    if target:IsPlayer() then CYBERWARE:ScreenFX(target, "blackwall", 3) end
+    DealDamage(target, ply, hack.damage * mult, DMG_SHOCK)
+end
+
+-- ================= ЧЁРНЫЙ ЗАСЛОН: ПОРЧА =================
+function CYBERWARE:AddBlackwall(ply, amount)
+    if not IsValid(ply) or not ply:IsPlayer() or amount <= 0 then return end
+    local cfg = self.Config.Blackwall
+    local value = self:GetBlackwall(ply) + amount
+    local overload = value >= cfg.Max
+
+    ply:SetNW2Float("Cyber_BW", overload and cfg.OverloadResetTo or value)
+    ply:SetNW2Float("Cyber_BWStamp", CurTime())
+    self:ScreenFX(ply, "blackwall", 2)
+
+    if overload then
+        self:PlaySound(ply, "bw_overload")
+        self:WorldFX("blackwall", ply, NULL, ply:WorldSpaceCenter())
+        self:ApplyEMP(ply, cfg.OverloadEMP)
+        DealDamage(ply, game.GetWorld(), cfg.OverloadDamage, DMG_SHOCK)
+        self:ScreenFX(ply, "bw_overload", 3)
+        Notify(ply, "ПЕРЕГРУЗКА ЧЁРНОГО ЗАСЛОНА: нейросеть выжжена, импланты отключены!", "error")
+    elseif value >= cfg.Max * 0.7 then
+        Notify(ply, "Порча Чёрного заслона " .. math.floor(value) .. "/" .. cfg.Max .. " — близко к перегрузке!", "warn")
+    end
+end
+
+net.Receive("Cyberware_PurgeBlackwall", function(len, ply)
+    if not CYBERWARE:IsAdmin(ply) then return end
+    local target = net.ReadEntity()
+    if not IsValid(target) or not target:IsPlayer() then return end
+    target:SetNW2Float("Cyber_BW", 0)
+    target:SetNW2Float("Cyber_BWStamp", 0)
+    Notify(ply, "Порча Чёрного заслона очищена у " .. target:Nick(), "success")
+    if target ~= ply then Notify(target, "Риппердок очистил вашу нейросеть от порчи Заслона", "success") end
+end)
+
 net.Receive("Cyberware_UseQuickhack", function(len, ply)
     if not IsValid(ply) or not ply:Alive() then return end
     local hackID = net.ReadString()
@@ -811,7 +872,12 @@ net.Receive("Cyberware_UseQuickhack", function(len, ply)
     ply:SetNW2Float("Cyber_HackCDTotal_" .. hackID, hackCD)
 
     CYBERWARE:PlaySound(ply, "hack_upload")
-    CYBERWARE:WorldFX("hack", ply, target)
+    CYBERWARE:WorldFX(hack.kind == "blackwall" and "bwhack" or "hack", ply, target)
+
+    if hack.corruption then
+        CYBERWARE:PlaySound(ply, "blackwall", 0.5)
+        CYBERWARE:AddBlackwall(ply, hack.corruption * (deck.blackwallMult or 1))
+    end
 
     if TrySelfIce(ply, target, hack) then return end
 
@@ -910,6 +976,12 @@ local function OffensiveBonuses(target, dmginfo, attacker)
     elseif bullet then
         mult = mult + st.gun
     end
+
+    -- Киберпсихоз: ярость усиливает любой урон, приступ — ещё и ближний бой
+    local pcfg = CYBERWARE.Config.Psychosis
+    if CYBERWARE:GetPsychosisStage(CYBERWARE:GetHumanity(attacker)) >= 2 then mult = mult * (1 + pcfg.DamageBonus) end
+    if melee and attacker:GetNW2Float("Cyber_Episode_Until", 0) > CurTime() then mult = mult * (1 + pcfg.EpisodeMelee) end
+
     if mult ~= 1 then dmginfo:ScaleDamage(mult) end
 
     if st.shockDmg > 0 and (melee or bullet) then dmginfo:AddDamage(st.shockDmg) end
@@ -966,6 +1038,9 @@ local function DefensiveBonuses(target, dmginfo)
     if target:GetNW2Bool("Cyber_Berserk_Active", false) then
         local osImp = CYBERWARE:GetEquippedInSlot(target, "OS")
         armor = armor + ((osImp and osImp.berserkArmor) or 0)
+    end
+    if target:GetNW2Float("Cyber_Episode_Until", 0) > now then
+        armor = armor + CYBERWARE.Config.Psychosis.EpisodeArmor
     end
     if armor > 0 then
         dmginfo:ScaleDamage(1 - math.min(armor, CYBERWARE.Config.Caps.Armor + 0.15))
@@ -1105,8 +1180,12 @@ hook.Add("EntityFireBullets", "Cyberware_GunControl", function(ent, data)
     if not IsValid(ent) or not ent:IsPlayer() then return end
     CYBERWARE:StopCamo(ent)
     local st = CYBERWARE:GetStats(ent)
-    if st.spreadMult < 1 then
-        data.Spread = data.Spread * st.spreadMult
+    local spread = st.spreadMult
+    if CYBERWARE:GetPsychosisStage(CYBERWARE:GetHumanity(ent)) >= 2 then
+        spread = spread * CYBERWARE.Config.Psychosis.SpreadPenalty
+    end
+    if spread ~= 1 then
+        data.Spread = data.Spread * spread
         return true
     end
 end)
@@ -1139,7 +1218,8 @@ hook.Add("PlayerSpawn", "Cyberware_ResetOnSpawn", function(ply)
         ply:SetNW2Bool("Cyber_Berserk_Active", false)
         ply:SetNW2Float("Cyber_OS_ActiveUntil", 0)
         for _, key in ipairs({ "Cyber_Exhausted", "Cyber_EMP_Until", "Cyber_Crippled_Until", "Cyber_Slowed_Until",
-                               "Cyber_JumpCharge", "Cyber_Camo_Until", "Cyber_Kiroshi_Active", "Cyber_Vamp_Until" }) do
+                               "Cyber_JumpCharge", "Cyber_Camo_Until", "Cyber_Kiroshi_Active", "Cyber_Vamp_Until",
+                               "Cyber_Episode_Until" }) do
             ply:SetNW2Float(key, 0)
         end
         local deck = CYBERWARE:GetDeck(ply)
@@ -1160,6 +1240,44 @@ hook.Add("PlayerDisconnected", "Cyberware_SaveOnLeave", function(ply)
     timer.Remove("Cyber_Camo_" .. SID(ply))
 end)
 
+-- ================= СТАДИИ ПСИХОЗА И ПРИСТУПЫ =================
+-- Сообщает игроку о пересечении порога человечности (в обе стороны)
+function CYBERWARE:CheckStage(ply)
+    if not IsValid(ply) or not ply:Alive() then return end
+    local stage = self:GetPsychosisStage(self:GetHumanity(ply))
+    local old = ply.Cyber_LastStage
+    ply.Cyber_LastStage = stage
+    if old == nil or old == stage then return end
+    net.Start("Cyberware_StageChange")
+    net.WriteUInt(stage, 2)
+    net.WriteUInt(old, 2)
+    net.Send(ply)
+end
+
+function CYBERWARE:StartEpisode(ply)
+    local pcfg = self.Config.Psychosis
+    ply:SetNW2Float("Cyber_Episode_Until", CurTime() + pcfg.EpisodeDuration)
+    ply.Cyber_NextEpisode = CurTime() + pcfg.EpisodeDuration + pcfg.EpisodeCooldown
+    self:PlaySound(ply, "episode")
+    self:ScreenFX(ply, "episode", pcfg.EpisodeDuration)
+    self:WorldFX("episode", ply, NULL, ply:GetPos())
+    self:UpdatePlayerStats(ply)
+    RefreshAfter(ply, pcfg.EpisodeDuration)
+
+    -- Окружающие видят приступ — РП-подсказка, что человек на грани
+    local witnesses = {}
+    for _, other in ipairs(player.GetAll()) do
+        if other ~= ply and other:GetPos():DistToSqr(ply:GetPos()) < pcfg.WitnessRadius ^ 2 then
+            witnesses[#witnesses + 1] = other
+        end
+    end
+    net.Start("Cyberware_Episode")
+    net.WriteEntity(ply)
+    net.WriteFloat(pcfg.EpisodeDuration)
+    net.Send(witnesses)
+    Notify(ply, "ПРИСТУП КИБЕРПСИХОЗА: вы теряете контроль!", "error")
+end
+
 -- ================= ПАССИВНЫЙ ТИК: РЕГЕНЕРАЦИЯ И ПСИХОЗ =================
 timer.Create("Cyberware_PassiveAndPsychosisTick", CYBERWARE.Config.RegenTick, 0, function()
     local now = CurTime()
@@ -1171,12 +1289,21 @@ timer.Create("Cyberware_PassiveAndPsychosisTick", CYBERWARE.Config.RegenTick, 0,
                 Heal(ply, st.regen)
             end
 
+            CYBERWARE:CheckStage(ply)
+
             -- Без тряски камеры: только галлюцинации на клиенте
-            local severity = CYBERWARE:GetPsychosisSeverity(CYBERWARE:GetHumanity(ply))
-            if severity > 0 and math.random() < severity * 0.35 then
+            local hum = CYBERWARE:GetHumanity(ply)
+            local severity = CYBERWARE:GetPsychosisSeverity(hum)
+            if severity > 0 and math.random() < 0.08 + severity * 0.35 then
                 net.Start("Cyberware_TriggerHallucination")
                 net.WriteFloat(severity)
                 net.Send(ply)
+            end
+
+            if CYBERWARE:GetPsychosisStage(hum) >= 3 and now > (ply.Cyber_NextEpisode or 0)
+                and ply:GetNW2Float("Cyber_Episode_Until", 0) < now
+                and math.random() < CYBERWARE.Config.Psychosis.EpisodeChance then
+                CYBERWARE:StartEpisode(ply)
             end
         end
     end

@@ -422,7 +422,8 @@ local function SpawnGhost(ply, col, life, alpha)
     ghosts[#ghosts + 1] = { ent = ghost, owner = ply, pos = ply:GetPos(), col = col, born = CurTime(), life = life, alpha = alpha or 0.5 }
 end
 
-local FX_LIFE = { hack = 0.45, chain = 0.3, emp = 0.7, pulse = 0.7, slam = 0.8, dash = 0.4, camo = 0.6, ice = 0.6, rocket = 1.5 }
+local FX_LIFE = { hack = 0.45, chain = 0.3, emp = 0.7, pulse = 0.7, slam = 0.8, dash = 0.4, camo = 0.6, ice = 0.6, rocket = 1.5,
+                  bwhack = 0.6, bwchain = 0.4, blackwall = 0.9, episode = 1.2 }
 
 net.Receive("Cyberware_FX", function()
     local kind = net.ReadString()
@@ -465,6 +466,114 @@ net.Receive("Cyberware_Ping", function()
         if IsValid(ent) then pinged[ent] = untilT end
     end
     UISound("lock")
+end)
+
+-- ================= СТАДИИ ПСИХОЗА: ПОРОГИ, НАВЯЗЧИВЫЕ МЫСЛИ, ПРИСТУПЫ =================
+local INTRUSIVE_THOUGHTS = {
+    "Они все смотрят на тебя.",
+    "Ещё немного хрома — и ты станешь сильнее.",
+    "Ты слышишь гул в проводах?",
+    "Кто это смотрит из зеркала?",
+    "Сломай их, пока они не сломали тебя.",
+    "Мясо слабо. Хром вечен.",
+    "Тебе ведь нравится этот звук… треск костей.",
+    "Почему руки не слушаются?",
+    "Никому нельзя доверять. Никому.",
+    "Ты помнишь своё имя?",
+}
+local PHANTOM_SOUNDS = {
+    "player/footsteps/concrete1.wav", "player/footsteps/concrete3.wav", "weapons/pistol/pistol_fire2.wav",
+    "npc/stalker/breathing3.wav", "ambient/levels/citadel/strange_talk8.wav", "npc/combine_soldier/gear3.wav",
+}
+
+local stageBanner = nil           -- { stage, old, born }
+local episodeWitness = {}         -- [игрок] = время окончания приступа (видят окружающие)
+local fakeEnemies = {}            -- [сущность] = время окончания ложной подсветки
+local thought = { text = "", born = 0, life = 0 }
+local blackout = { start = 0, finish = 0, text = "" }
+local psyNext = { thought = 0, phantom = 0, enemies = 0, blackout = 0 }
+
+net.Receive("Cyberware_StageChange", function()
+    local stage = net.ReadUInt(2)
+    local old = net.ReadUInt(2)
+    stageBanner = { stage = stage, old = old, born = RealTime() }
+    local ply = LocalPlayer()
+    if not IsValid(ply) then return end
+    if stage > old then
+        ply:EmitSound("ambient/levels/citadel/strange_talk" .. (stage >= 2 and 8 or 3) .. ".wav", 75, 85, 0.7, CHAN_STATIC)
+        ply:EmitSound("buttons/combine_button_locked.wav", 75, 70, 0.6, CHAN_STATIC)
+        if stage >= 3 then ply:EmitSound("npc/stalker/go_alert2a.wav", 75, 70, 0.6, CHAN_STATIC) end
+    else
+        UISound("success")
+    end
+end)
+
+net.Receive("Cyberware_Episode", function()
+    local ent = net.ReadEntity()
+    local dur = net.ReadFloat()
+    if not IsValid(ent) then return end
+    episodeWitness[ent] = CurTime() + dur
+    AddNotice((ent.Nick and ent:Nick() or "?") .. " теряет контроль — приступ киберпсихоза!", 3)
+end)
+
+hook.Add("Think", "Cyberware_PsychosisEvents", function()
+    local ply = LocalPlayer()
+    if not IsValid(ply) or not ply:Alive() then return end
+    local stage = CYBERWARE:GetPsychosisStage(CYBERWARE:GetHumanity(ply))
+    local now = CurTime()
+
+    if stage == 0 then
+        psyNext.thought, psyNext.phantom, psyNext.enemies, psyNext.blackout = 0, 0, 0, 0
+        return
+    end
+    local fxMul = cvPsychoFX:GetFloat()
+    local speed = stage >= 3 and 1.6 or 1
+
+    -- навязчивые мысли (с первой стадии)
+    if psyNext.thought == 0 then psyNext.thought = now + math.Rand(4, 10) end
+    if now > psyNext.thought then
+        psyNext.thought = now + math.Rand(stage >= 2 and 16 or 35, stage >= 2 and 30 or 60) / speed
+        thought.text = INTRUSIVE_THOUGHTS[math.random(#INTRUSIVE_THOUGHTS)]
+        thought.born, thought.life = now, 4.5
+        ply:EmitSound("ambient/levels/citadel/strange_talk" .. table.Random({ 3, 5, 8 }) .. ".wav", 70, math.random(75, 90), 0.25 + 0.15 * stage, CHAN_STATIC)
+    end
+
+    if stage < 2 then return end
+
+    -- фантомные звуки за спиной
+    if psyNext.phantom == 0 then psyNext.phantom = now + math.Rand(8, 15) end
+    if now > psyNext.phantom then
+        psyNext.phantom = now + math.Rand(18, 35) / speed
+        local behind = ply:GetPos() - ply:GetAimVector() * math.Rand(150, 300) + ply:GetRight() * math.Rand(-150, 150)
+        sound.Play(PHANTOM_SOUNDS[math.random(#PHANTOM_SOUNDS)], behind + Vector(0, 0, 40), 75, math.random(85, 105), 0.8)
+    end
+
+    -- ложная угроза: окружающие на миг кажутся врагами
+    if fxMul > 0 then
+        if psyNext.enemies == 0 then psyNext.enemies = now + math.Rand(10, 20) end
+        if now > psyNext.enemies then
+            psyNext.enemies = now + math.Rand(20, 40) / speed
+            local n = 0
+            for _, ent in ipairs(ents.FindInSphere(ply:GetPos(), 1500)) do
+                if n >= 3 then break end
+                if ent ~= ply and (ent:IsPlayer() or ent:IsNPC()) and ent:Health() > 0 then
+                    fakeEnemies[ent] = now + 0.9
+                    n = n + 1
+                end
+            end
+        end
+    end
+
+    -- провалы сознания (терминальная стадия)
+    if stage >= 3 then
+        if psyNext.blackout == 0 then psyNext.blackout = now + math.Rand(10, 20) end
+        if now > psyNext.blackout then
+            psyNext.blackout = now + math.Rand(25, 45)
+            blackout.start, blackout.finish = now, now + 0.35
+            blackout.text = table.Random({ "ТЫ — НЕ ТЫ", "ПРОСНИСЬ", "ГДЕ ТЫ БЫЛ?", "ВРЕМЯ ПОТЕРЯНО" })
+            ply:EmitSound("ambient/energy/whiteflash.wav", 70, 60, 0.5, CHAN_STATIC)
+        end
+    end
 end)
 
 -- Ломаная молния между точками (перегенерация 20 раз в секунду)
@@ -588,6 +697,20 @@ hook.Add("PostDrawTranslucentRenderables", "Cyberware_3DEffects", function(depth
                 render.DrawSprite(e.b:WorldSpaceCenter(), 60 * fade + 20, 60 * fade + 20, Color(60, 255, 200, 200 * fade))
             elseif e.kind == "chain" and IsValid(e.a) and IsValid(e.b) then
                 DrawBolt(e.a:WorldSpaceCenter(), e.b:WorldSpaceCenter(), Color(120, 200, 255, 255 * fade), 8, 8, 14)
+            elseif e.kind == "bwhack" and IsValid(e.a) and IsValid(e.b) then
+                DrawBolt(EntOrigin(e.a), e.b:WorldSpaceCenter(), Color(230, 20, 50, 255 * fade), 10, 14, 16)
+                DrawBolt(EntOrigin(e.a), e.b:WorldSpaceCenter(), Color(20, 0, 0, 200 * fade), 4, 10, 10)
+                render.SetMaterial(matGlow)
+                render.DrawSprite(e.b:WorldSpaceCenter(), 90 * fade + 30, 90 * fade + 30, Color(230, 20, 50, 220 * fade))
+            elseif e.kind == "bwchain" and IsValid(e.a) and IsValid(e.b) then
+                DrawBolt(e.a:WorldSpaceCenter(), e.b:WorldSpaceCenter(), Color(230, 20, 50, 255 * fade), 10, 8, 18)
+            elseif e.kind == "blackwall" then
+                DrawRing(e.pos - Vector(0, 0, 30), 20 + t * 260, Color(230, 20, 50, 255 * fade), 14)
+                DrawRing(e.pos - Vector(0, 0, 30), 10 + t * 160, Color(40, 0, 0, 255 * fade), 8)
+                render.SetMaterial(matGlow)
+                render.DrawSprite(e.pos, 200 * (1 - t * 0.5), 200 * (1 - t * 0.5), Color(230, 20, 50, 180 * fade))
+            elseif e.kind == "episode" and IsValid(e.a) then
+                DrawRing(e.a:GetPos(), 20 + t * 140, Color(255, 30, 60, 255 * fade), 6)
             elseif e.kind == "ice" and IsValid(e.a) then
                 render.SetMaterial(matGlow)
                 render.DrawSprite(e.a:WorldSpaceCenter(), 120 * (0.6 + t), 160 * (0.6 + t), Color(94, 246, 255, 220 * fade))
@@ -703,6 +826,20 @@ hook.Add("PreDrawHalos", "Cyberware_Halos", function()
     end
     if #pl > 0 then halo.Add(pl, C.pink, 2, 2, 1, true, true) end
 
+    -- Психоз: окружающие на миг кажутся угрозой; приступ соседа виден свидетелям
+    local fake, episode = {}, {}
+    for ent, untilT in pairs(fakeEnemies) do
+        if untilT < now or not IsValid(ent) then fakeEnemies[ent] = nil else fake[#fake + 1] = ent end
+    end
+    for ent, untilT in pairs(episodeWitness) do
+        if untilT < now or not IsValid(ent) then episodeWitness[ent] = nil else episode[#episode + 1] = ent end
+    end
+    if #fake > 0 then halo.Add(fake, Color(255, 0, 40), 3, 3, 2, true, true) end
+    if #episode > 0 then
+        local p = 2 + math.abs(math.sin(now * 6)) * 4
+        halo.Add(episode, Color(255, 20, 60), p, p, 2, true, false)
+    end
+
     if cvHUD:GetBool() and IsValid(hackTarget) and CYBERWARE:GetDeck(ply) then
         halo.Add({ hackTarget }, C.green, 1, 1, 1, true, false)
     end
@@ -750,6 +887,29 @@ hook.Add("RenderScreenspaceEffects", "Cyberware_FX", function()
             ["$pp_colour_addr"] = 0.1 * blind, ["$pp_colour_addg"] = 0.12 * blind, ["$pp_colour_addb"] = 0.15 * blind,
             ["$pp_colour_brightness"] = 0.25 * blind, ["$pp_colour_contrast"] = 1 - 0.55 * blind,
             ["$pp_colour_colour"] = 1 - 0.9 * blind,
+            ["$pp_colour_mulr"] = 0, ["$pp_colour_mulg"] = 0, ["$pp_colour_mulb"] = 0,
+        })
+    end
+
+    -- Приступ киберпсихоза: красный «тоннель»
+    local episodeFx = FxAmount("episode", 0.2, 1)
+    if episodeFx > 0 then
+        DrawColorModify({
+            ["$pp_colour_addr"] = 0.12 * episodeFx, ["$pp_colour_addg"] = 0, ["$pp_colour_addb"] = 0,
+            ["$pp_colour_brightness"] = -0.04 * episodeFx, ["$pp_colour_contrast"] = 1 + 0.35 * episodeFx,
+            ["$pp_colour_colour"] = 1 - 0.6 * episodeFx,
+            ["$pp_colour_mulr"] = 0.5 * episodeFx, ["$pp_colour_mulg"] = 0, ["$pp_colour_mulb"] = 0,
+        })
+    end
+
+    -- Порча Чёрного заслона: мир темнеет и уходит в красный
+    local bw = CYBERWARE:GetBlackwall(ply) / CYBERWARE.Config.Blackwall.Max
+    if bw > 0.2 then
+        local k = (bw - 0.2) / 0.8
+        DrawColorModify({
+            ["$pp_colour_addr"] = 0.04 * k, ["$pp_colour_addg"] = 0, ["$pp_colour_addb"] = 0,
+            ["$pp_colour_brightness"] = -0.05 * k, ["$pp_colour_contrast"] = 1 + 0.2 * k,
+            ["$pp_colour_colour"] = 1 - 0.4 * k,
             ["$pp_colour_mulr"] = 0, ["$pp_colour_mulg"] = 0, ["$pp_colour_mulb"] = 0,
         })
     end
@@ -967,7 +1127,8 @@ local function DrawMainHUD(ply)
 
     local deck = CYBERWARE:GetDeck(ply)
     local w = S(330)
-    local h = deck and S(96) or S(70)
+    local corruption = CYBERWARE:GetBlackwall(ply)
+    local h = S(86) + (deck and S(26) or 0) + (corruption > 0 and S(22) or 0)
     local x = S(24)
     local y = ScrH() - S(140) - h
 
@@ -993,13 +1154,15 @@ local function DrawMainHUD(ply)
         draw.SimpleText(ready and p.label or (p.label .. " " .. math.ceil(p.rem)), "CW_Tiny", px + pw / 2, py + ph / 2, ready and C.green or C.dim, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
     end
 
-    -- Панель человечности
+    -- Панель человечности (во время галлюцинации рамка «мигает» красным)
+    local hallucinating = CurTime() < psycho.flashEnd and cvPsychoFX:GetFloat() > 0
+    local frameCol = hallucinating and C.red or stageCol
     DrawChamfer(x, y, w, h, S(12), Color(7, 9, 14, 215))
-    surface.SetDrawColor(A(stageCol, 35))
+    surface.SetDrawColor(A(frameCol, 35))
     surface.SetMaterial(matGradL)
     surface.DrawTexturedRect(x, y, w * 0.5, h)
-    DrawChamferOutline(x, y, w, h, S(12), A(stageCol, 170))
-    surface.SetDrawColor(stageCol)
+    DrawChamferOutline(x, y, w, h, S(12), A(frameCol, 170))
+    surface.SetDrawColor(frameCol)
     surface.DrawRect(x + S(12), y, S(60), S(2))
 
     draw.SimpleText("ЧЕЛОВЕЧНОСТЬ", "CW_Tiny", x + S(14), y + S(10), C.dim)
@@ -1008,9 +1171,14 @@ local function DrawMainHUD(ply)
     local barY = y + S(32)
     local barW = w - S(28)
     DrawSegBar(x + S(14), barY, barW, S(8), hum / math.max(1, maxHum), stageCol, 25)
-    local markX = x + S(14) + barW * math.Clamp(CYBERWARE.Config.PsychosisStart / math.max(1, maxHum), 0, 1)
-    surface.SetDrawColor(C.yellow)
-    surface.DrawRect(markX, barY - S(3), S(2), S(14))
+    -- метки порогов стадий
+    for st, value in pairs({ [1] = CYBERWARE.Config.PsychosisStart, [2] = CYBERWARE.Config.PsychosisStage2 }) do
+        if value > 0 and value < maxHum then
+            local markX = x + S(14) + barW * value / maxHum
+            surface.SetDrawColor(CYBERWARE.StageColors[st])
+            surface.DrawRect(markX, barY - S(3), S(2), S(14))
+        end
+    end
 
     local stageText = CYBERWARE.StageNames[stage]
     if stage >= 2 then
@@ -1020,11 +1188,25 @@ local function DrawMainHUD(ply)
     end
     if emp then
         draw.SimpleText("ИМПЛАНТЫ ЗАБЛОКИРОВАНЫ ЭМИ", "CW_Tiny", x + w - S(14), barY + S(16), C.red, TEXT_ALIGN_RIGHT)
+    else
+        local left, nextStage = CYBERWARE:GetNextThreshold(hum)
+        local hint = left and ("до «" .. CYBERWARE.StageNames[nextStage] .. "»: " .. left) or "ДНО ДОСТИГНУТО"
+        draw.SimpleText(hint, "CW_Tiny", x + w - S(14), barY + S(16), left and left <= 10 and C.red or C.dim, TEXT_ALIGN_RIGHT)
+    end
+
+    local rowY = barY + S(34)
+    if corruption > 0 then
+        local maxBW = CYBERWARE.Config.Blackwall.Max
+        local bwCol = Color(230, 20, 50)
+        draw.SimpleText("ЗАСЛОН", "CW_Tiny", x + S(14), rowY + S(5), bwCol, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+        draw.SimpleText(math.floor(corruption) .. "/" .. maxBW .. "  (−" .. math.floor(corruption * CYBERWARE.Config.Blackwall.HumanityPerPoint) .. ")", "CW_Tiny", x + w - S(14), rowY + S(5), bwCol, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+        DrawSegBar(x + S(64), rowY, w - S(170), S(10), corruption / maxBW, bwCol, 20, S(2))
+        rowY = rowY + S(22)
     end
 
     if deck then
         local ram, maxRam = CYBERWARE:GetRAM(ply)
-        local ry = y + h - S(24)
+        local ry = rowY
         draw.SimpleText("ОЗУ", "CW_Tiny", x + S(14), ry + S(5), C.green, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
         draw.SimpleText(math.floor(ram) .. "/" .. maxRam, "CW_Tiny", x + w - S(14), ry + S(5), C.green, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
         DrawSegBar(x + S(44), ry, w - S(100), S(10), ram / math.max(1, maxRam), C.green, maxRam, S(3))
@@ -1161,6 +1343,15 @@ local function DrawScanTags(ply)
                 surface.DrawRect(x + S(6), y + S(17), w - S(12), S(4))
                 surface.SetDrawColor(col)
                 surface.DrawRect(x + S(6), y + S(17), (w - S(12)) * frac, S(4))
+                -- Кироши распознаёт киберпсихов
+                if ent:IsPlayer() then
+                    local st = CYBERWARE:GetPsychosisStage(CYBERWARE:GetHumanity(ent))
+                    if st >= 2 then
+                        local pc = CYBERWARE.StageColors[st]
+                        DrawChamfer(x, y - S(18), w, S(16), S(4), A(pc, 220))
+                        draw.SimpleText(st >= 3 and "КИБЕРПСИХ // ОПАСЕН" or "КИБЕРПСИХОЗ", "CW_Tiny", x + w / 2, y - S(10), Color(10, 10, 14), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+                    end
+                end
             end
         end
     end
@@ -1265,6 +1456,79 @@ local function DrawOverlays(ply)
                 surface.DrawRect(s.off * UIS, s.y * scrH, scrW, s.h * scrH)
             end
             GlitchText(psycho.text, "CW_Glitch", scrW * psycho.textX, scrH * psycho.textY, A(C.red, 255 * k), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, S(3))
+        end
+    end
+
+    -- Навязчивые мысли: субтитры внизу экрана
+    if fxMul > 0 and now < thought.born + thought.life then
+        local age = now - thought.born
+        local a = math.min(age / 0.5, 1, (thought.life - age) / 0.8) * 255 * math.max(0.5, fxMul)
+        GlitchText("« " .. thought.text .. " »", "CW_Sub", scrW / 2, scrH * 0.78, A(C.red, a), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, S(2))
+    end
+
+    -- Провал сознания: короткая чёрная вспышка
+    if fxMul > 0 and now < blackout.finish then
+        local k = 1 - (now - blackout.start) / (blackout.finish - blackout.start)
+        surface.SetDrawColor(0, 0, 0, 245 * k * fxMul)
+        surface.DrawRect(0, 0, scrW, scrH)
+        GlitchText(blackout.text, "CW_Huge", scrW / 2, scrH / 2, A(C.red, 255 * k), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, S(4))
+    end
+
+    -- Приступ
+    local episode = FxAmount("episode", 0.2, 1)
+    if episode > 0 then
+        DrawEdges(A(C.red, (90 + math.sin(now * 7) * 40) * episode), S(340))
+        local rem = math.ceil(FxRemaining("episode"))
+        GlitchText("ПРИСТУП КИБЕРПСИХОЗА", "CW_Title", scrW / 2, scrH * 0.2, A(C.red, 255 * episode), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, S(3))
+        draw.SimpleText("ярость: +урон в ближнем бою, +скорость  •  " .. rem .. " с", "CW_Small", scrW / 2, scrH * 0.2 + S(26), A(C.white, 220 * episode), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+    end
+
+    -- Чёрный заслон: тёмно-красные края и «код» по краям экрана
+    local bw = CYBERWARE:GetBlackwall(ply) / CYBERWARE.Config.Blackwall.Max
+    local bwHit = FxAmount("blackwall", 0.05, 0.6)
+    local bwK = math.max(bw > 0.3 and (bw - 0.3) / 0.7 or 0, bwHit)
+    if bwK > 0 then
+        DrawEdges(Color(120, 0, 15, 140 * bwK), S(300))
+        local seed = math.floor(now * 8)
+        surface.SetFont("CW_Tiny")
+        for i = 1, math.floor(10 + 30 * bwK) do
+            local side = util.SharedRandom("bwg_s" .. i, 0, 1, seed) < 0.5
+            local gx = side and util.SharedRandom("bwg_x" .. i, 0, 0.18, seed) * scrW or scrW - util.SharedRandom("bwg_x" .. i, 0, 0.18, seed) * scrW
+            local gy = util.SharedRandom("bwg_y" .. i, 0, 1, seed) * scrH
+            local glyph = string.format("%02X%02X", math.floor(util.SharedRandom("bwg_a" .. i, 0, 255, seed)), math.floor(util.SharedRandom("bwg_b" .. i, 0, 255, seed)))
+            draw.SimpleText(glyph, "CW_Tiny", gx, gy, Color(230, 20, 50, 160 * bwK))
+        end
+    end
+
+    local overload = FxAmount("bw_overload", 0.05, 1.2)
+    if overload > 0 then
+        surface.SetDrawColor(10, 0, 0, 220 * overload)
+        surface.DrawRect(0, 0, scrW, scrH)
+        GlitchText("ПЕРЕГРУЗКА ЧЁРНОГО ЗАСЛОНА", "CW_Huge", scrW / 2, scrH * 0.45, A(Color(230, 20, 50), 255 * overload), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, S(5))
+        draw.SimpleText("ОНИ ВИДЯТ ТЕБЯ", "CW_Sub", scrW / 2, scrH * 0.45 + S(40), A(C.white, 200 * overload), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+    end
+
+    -- Баннер пересечения порога человечности
+    if stageBanner then
+        local age = RealTime() - stageBanner.born
+        local life = 6
+        if age > life then
+            stageBanner = nil
+        else
+            local a = math.min(age / 0.3, 1, (life - age) / 0.8)
+            local st = stageBanner.stage
+            local col = CYBERWARE.StageColors[st]
+            local worse = st > stageBanner.old
+            local bw2, bh2 = S(620), S(118)
+            local bx, by = scrW / 2 - bw2 / 2, scrH * 0.28
+            DrawChamfer(bx, by, bw2, bh2, S(14), Color(6, 8, 12, 225 * a))
+            DrawChamferOutline(bx, by, bw2, bh2, S(14), A(col, 230 * a), 2)
+            surface.SetDrawColor(A(col, 50 * a))
+            surface.SetMaterial(matGradD)
+            surface.DrawTexturedRect(bx, by, bw2, bh2)
+            draw.SimpleText(worse and "ПОРОГ ЧЕЛОВЕЧНОСТИ ПЕРЕЙДЁН" or "СОСТОЯНИЕ УЛУЧШИЛОСЬ", "CW_Small", scrW / 2, by + S(14), A(C.dim, 255 * a), TEXT_ALIGN_CENTER)
+            GlitchText(CYBERWARE.StageNames[st], "CW_Title", scrW / 2, by + S(48), A(col, 255 * a), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, S(3))
+            draw.SimpleText(CYBERWARE.StageHints[st] or "", "CW_Small", scrW / 2, by + S(84), A(C.white, 230 * a), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
         end
     end
 end
@@ -1753,8 +2017,15 @@ local function BuildStatsTab(content, ply)
             y = y + S(32)
         end
 
-        draw.SimpleText("Ниже " .. cfg.PsychosisStart .. " — галлюцинации, ниже " .. cfg.PsychosisStage2 .. " — киберпсихоз,", "CW_Tiny", S(18), h - S(40), C.dim)
-        draw.SimpleText("ниже " .. cfg.PsychosisTerminal .. " — терминальная стадия. Лимит повышает риппердок.", "CW_Tiny", S(18), h - S(24), C.dim)
+        local corruption = CYBERWARE:GetBlackwall(ply)
+        if corruption > 0 then
+            local bwc = Color(230, 20, 50)
+            draw.SimpleText("ПОРЧА ЧЁРНОГО ЗАСЛОНА: " .. math.floor(corruption) .. "/" .. CYBERWARE.Config.Blackwall.Max .. "  (−" .. math.floor(corruption * CYBERWARE.Config.Blackwall.HumanityPerPoint) .. " человечности)", "CW_Tiny", S(18), h - S(78), bwc)
+            DrawSegBar(S(18), h - S(62), w - S(36), S(6), corruption / CYBERWARE.Config.Blackwall.Max, bwc, 25)
+        end
+        draw.SimpleText(CYBERWARE.StageHints[stage] or "", "CW_Tiny", S(18), h - S(46), sc)
+        draw.SimpleText("Ниже " .. cfg.PsychosisStart .. " — нестабильность, ниже " .. cfg.PsychosisStage2 .. " — киберпсихоз,", "CW_Tiny", S(18), h - S(32), C.dim)
+        draw.SimpleText("ниже " .. cfg.PsychosisTerminal .. " — терминальная стадия. Лимит повышает риппердок.", "CW_Tiny", S(18), h - S(18), C.dim)
     end
 
     local right = CyberScroll(content)
@@ -1827,6 +2098,7 @@ local function HackCard(parent, hackID, hack, ply, opts)
 
         draw.SimpleText(hack.name, "CW_Head", S(16), S(8), owned and C.white or C.dim)
         local info = "ОЗУ " .. hack.ram .. "  •  КД " .. hack.cooldown .. " с"
+        if hack.corruption then info = info .. "  •  ПОРЧА +" .. hack.corruption end
         if hack.playersOnly then info = info .. "  •  только игроки" end
         if hack.npcOnly then info = info .. "  •  только NPC" end
         draw.SimpleText(info, "CW_Tiny", S(16), S(30), kc)
@@ -2007,10 +2279,10 @@ local function BuildSettingsTab(content)
     local note = vgui.Create("DPanel", right)
     note:Dock(TOP)
     note:DockMargin(0, S(10), S(8), 0)
-    note:SetTall(S(90))
+    note:SetTall(S(110))
     note.Paint = function(self, w, h)
         DrawChamfer(0, 0, w, h, S(8), Color(14, 18, 27, 200))
-        DrawWrapped("Психоз больше не трясёт камеру: эффекты ограничены цветом, виньеткой и редкими помехами. Если они мешают, уменьшите интенсивность ползунком выше.", "CW_Small", S(14), S(10), w - S(28), C.dim, S(16), 5)
+        DrawWrapped("Психоз не трясёт камеру. Границы стадий видны по HUD (метки на полосе и «до порога: N»), по баннеру при пересечении порога и по нарастающим эффектам: навязчивые мысли, фантомные звуки, ложные угрозы, провалы сознания. Интенсивность регулируется ползунком выше.", "CW_Small", S(14), S(10), w - S(28), C.dim, S(16), 5)
     end
 end
 
@@ -2217,7 +2489,9 @@ function CYBERWARE:OpenRipperdocMenu()
         draw.SimpleText(patient:SteamID() or "", "CW_Tiny", S(18), S(36), C.dim)
 
         local gx, gy, gw = S(18), S(66), w * 0.5 - S(30)
-        draw.SimpleText("ЧЕЛОВЕЧНОСТЬ " .. hum .. " / " .. maxHum .. "  •  " .. CYBERWARE.StageNames[stage], "CW_BodyB", gx, S(50) - S(6), sc)
+        local corruption = CYBERWARE:GetBlackwall(patient)
+        draw.SimpleText("ЧЕЛОВЕЧНОСТЬ " .. hum .. " / " .. maxHum .. "  •  " .. CYBERWARE.StageNames[stage]
+            .. (corruption > 0 and ("  •  ЗАСЛОН " .. math.floor(corruption)) or ""), "CW_BodyB", gx, S(50) - S(6), sc)
         DrawSegBar(gx, gy + S(8), gw, S(10), hum / math.max(1, maxHum), sc, 30)
 
         -- прогноз при наведении на имплант
@@ -2297,6 +2571,19 @@ function CYBERWARE:OpenRipperdocMenu()
     end)
     clearB:SetPos(mainW - S(140), S(70))
     clearB:SetSize(S(124), S(30))
+
+    local purgeB = CyberButton(head, "ОЧИСТИТЬ ЗАСЛОН", Color(230, 20, 50), function()
+        if not IsValid(patient) then return end
+        net.Start("Cyberware_PurgeBlackwall")
+        net.WriteEntity(patient)
+        net.SendToServer()
+    end, "CW_Tiny")
+    purgeB:SetPos(mainW * 0.5 - S(170), S(10))
+    purgeB:SetSize(S(160), S(26))
+    -- Скрытая панель не получает Think, поэтому видимостью управляет всегда видимая шапка
+    head.Think = function()
+        purgeB:SetVisible(IsValid(patient) and CYBERWARE:GetBlackwall(patient) > 0)
+    end
 
     -- ===== Вкладки категорий =====
     local tabY = sideTop + S(130)
@@ -2597,7 +2884,8 @@ concommand.Add("cyber_quickhack_menu", function()
                 surface.SetDrawColor(A(C.cyan, 40))
                 surface.DrawRect(S(3), bh - S(3), (bw - S(6)) * (1 - cd / total), S(2))
             end
-            draw.SimpleText(ok and ("ОЗУ " .. hck.data.ram) or why, "CW_Tiny", bw - S(12), bh / 2, ok and C.green or C.red, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
+            local okText = "ОЗУ " .. hck.data.ram .. (hck.data.corruption and ("  •  ПОРЧА +" .. hck.data.corruption) or "")
+            draw.SimpleText(ok and okText or why, "CW_Tiny", bw - S(12), bh / 2, ok and (hck.data.corruption and Color(230, 20, 50) or C.green) or C.red, TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
         end
         b.OnCursorEntered = function() hovered = hck UISound("hover") end
         b.OnCursorExited = function() if hovered == hck then hovered = nil end end
